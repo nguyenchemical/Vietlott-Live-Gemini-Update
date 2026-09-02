@@ -249,7 +249,6 @@
 
     <!-- Script Logic -->
     <script>
-        // Đường dẫn Cloudflare Worker mới đã cập nhật
         const MY_CLOUDFLARE_WORKER = "https://vietlott.nguyenchemical.workers.dev";
 
         let rawDraws = [];
@@ -296,10 +295,11 @@
                 rawDraws = await fetchRealVietlottData(gameType);
                 if (!rawDraws || rawDraws.length < 1) throw new Error("Dữ liệu từ API trống");
                 
-                statusEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span><span>Worker Realtime</span>`;
+                const nowStr = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                statusEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span><span>Live - ${nowStr}</span>`;
                 statusEl.className = "inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
             } catch (error) {
-                console.warn("Lỗi kết nối Worker, khởi tạo dữ liệu mô phỏng dự phòng:", error);
+                console.warn("Lỗi đọc dữ liệu từ Worker, sử dụng dữ liệu mô phỏng:", error);
                 rawDraws = generateSyntheticData(gameType);
                 statusEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span><span>Synthetic Data</span>`;
                 statusEl.className = "inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20";
@@ -310,47 +310,81 @@
 
         async function fetchRealVietlottData(gameType) {
             const code = VIETLOTT_GAME_CODES[gameType] || '645';
-            const vietlottApiUrl = `https://vietlott.vn/api/front/kew-result-game-list?gameType=${encodeURIComponent(code)}&page=1&limit=50`;
-            const proxyWorkerUrl = `${MY_CLOUDFLARE_WORKER.replace(/\/$/, '')}?url=${encodeURIComponent(vietlottApiUrl)}`;
+            
+            // Gọi trực tiếp tới Worker hoặc truyền param
+            const proxyWorkerUrl = `${MY_CLOUDFLARE_WORKER.replace(/\/$/, '')}?gameType=${encodeURIComponent(code)}&page=1&limit=50`;
 
             const response = await fetch(proxyWorkerUrl, { cache: 'no-cache' });
             if (!response.ok) throw new Error(`Worker HTTP status: ${response.status}`);
 
-            const data = await response.json();
-            const list = Array.isArray(data) ? data : (data.resultList || data.list || data.data || []);
-            
-            if (list && list.length >= 1) {
-                return normalizeDrawData(list, gameType);
+            const responseText = await response.text();
+            let data;
+            try {
+                data = JSON.parse(responseText);
+            } catch (e) {
+                // Nếu Worker trả về HTML hoặc Text thô
+                data = responseText;
             }
 
-            throw new Error("Không giải mã được dữ liệu trả về từ Worker API");
+            return parseWorkerResponse(data, gameType);
         }
 
-        function normalizeDrawData(list, gameType) {
-            return list.map(item => {
+        function parseWorkerResponse(data, gameType) {
+            let list = [];
+            
+            if (Array.isArray(data)) {
+                list = data;
+            } else if (typeof data === 'object' && data !== null) {
+                list = data.resultList || data.list || data.data || data.results || [data];
+            } else if (typeof data === 'string') {
+                // Trường hợp Worker trả về chuỗi HTML/Text thô, bóc tách bằng Regex
+                const drawMatches = data.match(/#(0\d{4}|\d{4,5})[\s\S]*?(\d{2}\/\d{2}\/\d{4})/g) || [];
+                return drawMatches.map((block, idx) => {
+                    const idMatch = block.match(/#(\d+)/);
+                    const dateMatch = block.match(/\d{2}\/\d{2}\/\d{4}/);
+                    const nums = (block.match(/\b\d{2}\b/g) || []).map(n => parseInt(n, 10));
+                    return {
+                        id: idMatch ? `#${idMatch[1]}` : `#0${1500 - idx}`,
+                        date: dateMatch ? dateMatch[0] : new Date().toLocaleDateString('vi-VN'),
+                        numbers: nums.slice(0, 7)
+                    };
+                }).filter(d => d.numbers.length >= 6);
+            }
+
+            if (!list || list.length === 0) return [];
+
+            return list.map((item, idx) => {
                 let parsedNumbers = [];
-                const jsonStr = JSON.stringify(item);
-                const matches = jsonStr.match(/\d+/g) || [];
+                
+                // Trường hợp Item chứa mảng số trực tiếp
+                if (Array.isArray(item.numbers) || Array.isArray(item.result)) {
+                    parsedNumbers = (item.numbers || item.result).map(n => parseInt(n, 10));
+                } else {
+                    // Trích xuất các con số từ đối tượng/chuỗi
+                    const str = JSON.stringify(item);
+                    const matches = str.match(/\d+/g) || [];
+                    
+                    if (['mega645', 'power655', 'lotto535'].includes(gameType)) {
+                        const maxLimit = gameType === 'power655' ? 55 : (gameType === 'mega645' ? 45 : 35);
+                        parsedNumbers = matches
+                            .map(n => parseInt(n, 10))
+                            .filter(n => n >= 1 && n <= maxLimit);
 
-                if (['mega645', 'power655', 'lotto535'].includes(gameType)) {
-                    parsedNumbers = matches
-                        .map(n => parseInt(n, 10))
-                        .filter(n => n >= 1 && n <= (gameType === 'power655' ? 55 : (gameType === 'mega645' ? 45 : 35)));
-
-                    if (gameType === 'lotto535') parsedNumbers = parsedNumbers.slice(0, 6);
-                    else parsedNumbers = parsedNumbers.slice(0, 7);
-
-                } else if (gameType.startsWith('max3d')) {
-                    let digitsOnly = matches.join('');
-                    let triplets = [];
-                    for (let i = 0; i <= digitsOnly.length - 3; i += 3) {
-                        triplets.push(digitsOnly.substring(i, i + 3));
+                        parsedNumbers = Array.from(new Set(parsedNumbers)); // Lọc trùng
+                        if (gameType === 'lotto535') parsedNumbers = parsedNumbers.slice(0, 6);
+                        else parsedNumbers = parsedNumbers.slice(0, 7);
+                    } else if (gameType.startsWith('max3d')) {
+                        let digitsOnly = matches.join('');
+                        let triplets = [];
+                        for (let i = 0; i <= digitsOnly.length - 3; i += 3) {
+                            triplets.push(digitsOnly.substring(i, i + 3));
+                        }
+                        parsedNumbers = gameType === 'max3d' ? triplets.slice(0, 1) : triplets.slice(0, 2);
                     }
-                    parsedNumbers = gameType === 'max3d' ? triplets.slice(0, 1) : triplets.slice(0, 2);
                 }
 
                 return {
-                    id: `#${item.DrawId || item.id || item.period || item.Period || '0000'}`,
+                    id: item.DrawId ? `#${item.DrawId}` : (item.id ? `#${item.id}` : `#0${1556 - idx}`),
                     date: item.DrawDate || item.date || item.Date || new Date().toLocaleDateString('vi-VN'),
                     numbers: parsedNumbers
                 };
@@ -413,7 +447,7 @@
             const targetTime = getNextDrawTime(gameType);
             const dateStr = targetTime.toLocaleDateString('vi-VN');
             const dayName = daysVi[targetTime.getDay()];
-            const drawNum = getRandomInt(1150, 1350);
+            const drawNum = getRandomInt(1260, 1330);
 
             let gameName = "Mega 6/45";
             if (gameType === 'power655') gameName = "Power 6/55";
