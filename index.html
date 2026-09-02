@@ -173,7 +173,7 @@
                     <h2 class="text-xs font-bold uppercase text-amber-400 flex items-center gap-1">
                         <i data-lucide="sparkles" class="w-3.5 h-3.5"></i> Kết quả dự đoán từ AI Model
                     </h2>
-                    <span class="text-[9px] text-emerald-400 font-mono">Cloudflare Realtime Stream</span>
+                    <span class="text-[9px] text-emerald-400 font-mono">Cloudflare Worker Direct Stream</span>
                 </div>
                 <div id="predictions-container" class="space-y-1.5 overflow-y-auto custom-scrollbar flex-1 pr-1 max-h-[350px] md:max-h-none">
                     <div class="text-xs text-slate-400 italic text-center py-8 bg-slate-950/50 rounded-lg border border-slate-800">
@@ -249,7 +249,7 @@
 
     <!-- Script Logic -->
     <script>
-        // Đã cập nhật chính xác đường dẫn Cloudflare Worker của bạn
+        // Đường dẫn Cloudflare Worker cá nhân của bạn
         const MY_CLOUDFLARE_WORKER = "https://vietlott-gemini.nguyenchemical.workers.dev";
 
         let rawDraws = [];
@@ -294,38 +294,27 @@
 
             try {
                 rawDraws = await fetchRealVietlottData(gameType);
-                if (!rawDraws || rawDraws.length < 1) throw new Error("Dữ liệu trống");
+                if (!rawDraws || rawDraws.length < 1) throw new Error("Dữ liệu từ API trống");
                 
-                statusEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span><span>Cloudflare Live</span>`;
+                statusEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span><span>Worker Realtime</span>`;
                 statusEl.className = "inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
             } catch (error) {
-                console.warn("Chuyển sang bộ dữ liệu dự phòng:", error);
+                console.warn("Lỗi kết nối Worker, khởi tạo dữ liệu mô phỏng dự phòng:", error);
                 rawDraws = generateSyntheticData(gameType);
-                statusEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-blue-400"></span><span>Backup Data</span>`;
-                statusEl.className = "inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20";
+                statusEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span><span>Synthetic Data</span>`;
+                statusEl.className = "inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20";
             }
 
             renderAll();
         }
 
         async function fetchRealVietlottData(gameType) {
-            // Lấy từ nguồn tĩnh cục bộ nếu có
-            try {
-                const resRepo = await fetch(`data/${gameType}.json?t=${Date.now()}`);
-                if (resRepo.ok) {
-                    const dataRepo = await resRepo.json();
-                    const list = Array.isArray(dataRepo) ? dataRepo : (dataRepo.resultList || dataRepo.list || dataRepo.data || []);
-                    if (list.length >= 1) return normalizeDrawData(list, gameType);
-                }
-            } catch (e) {}
-
-            // Truy vấn qua Cloudflare Worker của bạn
             const code = VIETLOTT_GAME_CODES[gameType] || '645';
             const vietlottApiUrl = `https://vietlott.vn/api/front/kew-result-game-list?gameType=${encodeURIComponent(code)}&page=1&limit=50`;
-            const proxyWorkerUrl = `${MY_CLOUDFLARE_WORKER}?url=${encodeURIComponent(vietlottApiUrl)}`;
+            const proxyWorkerUrl = `${MY_CLOUDFLARE_WORKER.replace(/\/$/, '')}?url=${encodeURIComponent(vietlottApiUrl)}`;
 
             const response = await fetch(proxyWorkerUrl, { cache: 'no-cache' });
-            if (!response.ok) throw new Error("Kết nối Cloudflare Worker thất bại");
+            if (!response.ok) throw new Error(`Worker HTTP status: ${response.status}`);
 
             const data = await response.json();
             const list = Array.isArray(data) ? data : (data.resultList || data.list || data.data || []);
@@ -334,7 +323,7 @@
                 return normalizeDrawData(list, gameType);
             }
 
-            throw new Error("Không giải mã được dữ liệu từ API");
+            throw new Error("Không giải mã được dữ liệu trả về từ Worker API");
         }
 
         function normalizeDrawData(list, gameType) {
