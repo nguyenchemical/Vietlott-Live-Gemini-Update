@@ -143,7 +143,7 @@
                 </select>
             </div>
 
-            <!-- AI Model Chọn Lựa Super Upgrade -->
+            <!-- AI Model Chọn Lựa -->
             <div class="bg-slate-800/80 border border-slate-700/80 p-2 rounded-xl shrink-0">
                 <label class="block text-[10px] font-bold uppercase text-slate-400 mb-1 flex items-center gap-1">
                     <i data-lucide="zap" class="w-3 h-3 text-amber-400"></i> Mô Hình AI Siêu Cấp
@@ -271,6 +271,15 @@
         let currentTicketCount = 2;
         let lastRealJackpotBillionVnd = null;
 
+        // Cập nhật URL Cloudflare Worker mới
+        const OWN_PROXY_URL = "https://vietlott-gemini.nguyenchemical.workers.dev/?url=";
+
+        const CORS_PROXIES = [
+            (url) => `${OWN_PROXY_URL}${encodeURIComponent(url)}`,
+            (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+            (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`
+        ];
+
         // Tự động tạo Manifest
         (function initDynamicManifest() {
             try {
@@ -367,7 +376,7 @@
                 let fresh;
                 try { fresh = await fetchRealVietlottData(gameType); } 
                 catch (firstError) {
-                    await new Promise(r => setTimeout(r, 1500));
+                    await new Promise(r => setTimeout(r, 1000));
                     fresh = await fetchRealVietlottData(gameType);
                 }
                 if (!fresh || fresh.length < 1) throw new Error("Dữ liệu nhận về quá ít");
@@ -411,16 +420,6 @@
             }, 3 * 60 * 1000);
         }
 
-        // Lấy dữ liệu qua Worker hoạt động sẵn có của bạn
-        const OWN_PROXY_URL = "https://vietlott.nguyenchemical.workers.dev/?url=";
-
-        const CORS_PROXIES = [
-            (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-            (url) => `https://proxy.cors.sh/${url}`,
-            (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-            (url) => `https://corsfix.com/${url}`
-        ];
-
         const VIETLOTT_RESULT_PATH = {
             'mega645': '645', 'power655': '655', 'lotto535': '535',
             'max3d': 'max-3d', 'max3dplus': 'max-3d', 'max3dpro': 'max-3dpro'
@@ -455,7 +454,7 @@
             return { id: `#${drawId}`, date: drawDate, numbers, jackpot };
         }
 
-        async function fetchWithTimeout(url, options = {}, timeoutMs = 7000) {
+        async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), timeoutMs);
             try { return await fetch(url, { ...options, signal: controller.signal }); }
@@ -466,27 +465,20 @@
             const resultPath = VIETLOTT_RESULT_PATH[gameType] || '645';
             const targetUrl = `https://vietlott.vn/vi/trung-thuong/ket-qua-trung-thuong/${resultPath}`;
 
-            const proxyBuilders = [];
-            if (OWN_PROXY_URL) proxyBuilders.push((url) => `${OWN_PROXY_URL}${encodeURIComponent(url)}`);
-            proxyBuilders.push(...CORS_PROXIES);
-
             let lastError = null;
-            for (let pass = 0; pass < 2; pass++) {
-                if (pass === 1) await new Promise(r => setTimeout(r, 1500));
-                for (let i = 0; i < proxyBuilders.length; i++) {
-                    const buildProxyUrl = proxyBuilders[i];
-                    try {
-                        const response = await fetchWithTimeout(buildProxyUrl(targetUrl), { cache: 'no-cache' }, 8000);
-                        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                        const html = await response.text();
-                        const latestDraw = parseVietlottResultHtml(html, gameType);
-                        lastRealJackpotBillionVnd = latestDraw.jackpot ? (latestDraw.jackpot / 1e9) : null;
-                        const synthetic = generateSyntheticData(gameType).slice(1);
-                        return [{ id: latestDraw.id, date: latestDraw.date, numbers: latestDraw.numbers }, ...synthetic];
-                    } catch (e) {
-                        lastError = e;
-                        continue;
-                    }
+            for (let i = 0; i < CORS_PROXIES.length; i++) {
+                const proxyFn = CORS_PROXIES[i];
+                try {
+                    const response = await fetchWithTimeout(proxyFn(targetUrl), { cache: 'no-cache' }, 8000);
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    const html = await response.text();
+                    const latestDraw = parseVietlottResultHtml(html, gameType);
+                    lastRealJackpotBillionVnd = latestDraw.jackpot ? (latestDraw.jackpot / 1e9) : null;
+                    const synthetic = generateSyntheticData(gameType).slice(1);
+                    return [{ id: latestDraw.id, date: latestDraw.date, numbers: latestDraw.numbers }, ...synthetic];
+                } catch (e) {
+                    lastError = e;
+                    continue;
                 }
             }
             throw lastError || new Error("Không lấy được dữ liệu Live");
@@ -662,7 +654,6 @@
             });
         }
 
-        // --- NÂNG CẤP LỚP AI SUPER APPS ---
         async function trainAndPredict() {
             const btn = document.getElementById('btn-train');
             const statusEl = document.getElementById('training-status');
@@ -703,7 +694,6 @@
             let predictionData = [];
 
             if (algoType === 'tf-attention') {
-                // Algorithmic Upgrade: Custom Self-Attention Pattern via TensorFlow.js
                 statusEl.innerText = "Xây dựng Self-Attention Layer...";
                 progressEl.style.width = '25%';
                 await tf.nextFrame();
@@ -718,11 +708,9 @@
                 const xs = tf.tensor3d(seqInputs);
                 const ys = tf.tensor2d(seqLabels);
 
-                // Build Custom Attention Neural Architecture
                 const inputLayer = tf.input({shape: [timesteps, featureSize]});
                 const lstmOut = tf.layers.lstm({units: 64, returnSequences: true}).apply(inputLayer);
                 
-                // Dot-product Attention Mechanism Simulating Attention Layer
                 const query = tf.layers.dense({units: 64}).apply(lstmOut);
                 const score = tf.layers.dot({axes: [2, 2]}).apply([query, lstmOut]);
                 const weights = tf.layers.activation({activation: 'softmax'}).apply(score);
@@ -759,7 +747,6 @@
                 xs.dispose(); ys.dispose(); model.dispose();
 
             } else if (algoType === 'ensemble-hybrid') {
-                // Multi-Engine Hybrid Ensemble (Tensor Analytics + Statistical Frequency + Omit Spacing)
                 statusEl.innerText = "Chạy thuật toán Ensemble Hybrid...";
                 progressEl.style.width = '50%';
                 logTrain(`<b class="text-amber-400">[Ensemble]</b> Tổng hợp xác suất từ Deep Learning, Tần suất và Khoảng Vắng`);
@@ -795,7 +782,6 @@
                 const maxScore = Math.max(...scores, 1e-6);
                 predictionData = scores.map(s => Math.max(s / maxScore, 0.02));
             } else {
-                // Classic LSTM Time Series
                 const timesteps = 4;
                 const seqInputs = [], seqLabels = [];
                 for (let i = 0; i <= vectors.length - timesteps - 1; i++) {
