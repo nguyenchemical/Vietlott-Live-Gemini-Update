@@ -102,7 +102,7 @@
                 </button>
                 <span id="data-status" class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
                     <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping"></span>
-                    <span>Đang kết nối...</span>
+                    <span>Khởi tạo...</span>
                 </span>
             </div>
         </div>
@@ -271,8 +271,8 @@
         let currentTicketCount = 2;
         let lastRealJackpotBillionVnd = null;
 
-        // Cập nhật URL Cloudflare Worker mới
-        const OWN_PROXY_URL = "https://vietlott-gemini.nguyenchemical.workers.dev/?url=";
+        const WORKER_BASE = "https://vietlott-gemini.nguyenchemical.workers.dev";
+        const OWN_PROXY_URL = `${WORKER_BASE}/?url=`;
 
         const CORS_PROXIES = [
             (url) => `${OWN_PROXY_URL}${encodeURIComponent(url)}`,
@@ -280,7 +280,47 @@
             (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`
         ];
 
-        // Tự động tạo Manifest
+        // Tự động đọc file từ GitHub khi vừa mở App
+        async function syncFromGitHubOnLaunch() {
+            const statusEl = document.getElementById('data-status');
+            try {
+                if (statusEl) {
+                    statusEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping"></span><span>GitHub Sync...</span>`;
+                }
+
+                const response = await fetch(`${WORKER_BASE}/api/sync-data`, { cache: 'no-cache' });
+                if (!response.ok) throw new Error("Chưa có file GitHub");
+
+                const ghData = await response.json();
+                if (ghData && Array.isArray(ghData) && ghData.length > 0) {
+                    rawDraws = ghData;
+                    renderAll();
+                    if (statusEl) {
+                        const now = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+                        statusEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span><span>GitHub Live · ${now}</span>`;
+                        statusEl.className = "inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+                    }
+                    return true;
+                }
+            } catch (e) {
+                console.log("GitHub chưa có file data, tải trực tiếp Vietlott...");
+            }
+            return false;
+        }
+
+        // Tự động đẩy dữ liệu mới lên GitHub Repo
+        async function saveToGitHub(dataToSave) {
+            try {
+                await fetch(`${WORKER_BASE}/api/save-to-github`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(dataToSave)
+                });
+            } catch (e) {
+                console.error("Lỗi đồng bộ GitHub:", e);
+            }
+        }
+
         (function initDynamicManifest() {
             try {
                 const manifest = {
@@ -301,7 +341,7 @@
                 const blob = new Blob([JSON.stringify(manifest)], { type: 'application/json' });
                 const linkEl = document.getElementById('pwa-manifest-link');
                 if (linkEl) linkEl.setAttribute('href', URL.createObjectURL(blob));
-            } catch (e) { console.warn('Lỗi khởi tạo manifest:', e); }
+            } catch (e) { console.warn('Lỗi manifest:', e); }
         })();
 
         tf.ready().then(async () => {
@@ -356,7 +396,10 @@
 
         async function initApp() {
             const gameType = document.getElementById('game-type').value;
-            await refreshLiveData(gameType, true);
+            const synced = await syncFromGitHubOnLaunch();
+            if (!synced) {
+                await refreshLiveData(gameType, true);
+            }
             renderAll();
             startAutoRefresh(gameType);
         }
@@ -379,8 +422,11 @@
                     await new Promise(r => setTimeout(r, 1000));
                     fresh = await fetchRealVietlottData(gameType);
                 }
-                if (!fresh || fresh.length < 1) throw new Error("Dữ liệu nhận về quá ít");
+                if (!fresh || fresh.length < 1) throw new Error("Dữ liệu quá ít");
                 rawDraws = fresh;
+
+                // Tự động ghi vào GitHub Repo ngay khi lấy thành công
+                saveToGitHub(rawDraws);
 
                 const now = formatClock(new Date());
                 statusEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span><span>Live · ${now}</span>`;
@@ -427,11 +473,11 @@
 
         function parseVietlottResultHtml(html, gameType) {
             const anchorIdx = html.indexOf('day_so_ket_qua');
-            if (anchorIdx === -1) throw new Error("Cấu trúc HTML trang nguồn thay đổi");
+            if (anchorIdx === -1) throw new Error("Cấu trúc HTML thay đổi");
             const windowHtml = html.substring(anchorIdx, anchorIdx + 2000);
 
             const ballMatches = [...windowHtml.matchAll(/bong_tron[^"]*">\s*(\d+)\s*</g)].map(m => m[1]);
-            if (ballMatches.length < 1) throw new Error("Không thể trích xuất số kết quả");
+            if (ballMatches.length < 1) throw new Error("Không trích xuất được bóng");
 
             let numbers;
             if (gameType.startsWith('max3d')) {
@@ -481,7 +527,7 @@
                     continue;
                 }
             }
-            throw lastError || new Error("Không lấy được dữ liệu Live");
+            throw lastError || new Error("Không thể kết nối Live Vietlott");
         }
 
         function generateSyntheticData(gameType) {
